@@ -37,9 +37,10 @@ void formatHex(uint8_t *in, int lenIn, char *out)
   }
 }
 
-uint8_t *temp = (uint8_t *)malloc(4);
+
 void reverse_chunks(uint8_t *data, int len)
 {
+  uint8_t temp[64];
   for (int i = 0; i < len; i += 4)
   {
     temp[i] = data[i + 3];

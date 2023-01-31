@@ -19,12 +19,16 @@ Temperatures readTemperatureData(BLEDevice device, const char *key)
     Temperatures t;
     t.valid = false;
 
+    long start = millis();
     sendEmptyPin(device);
     int read = readCharacteristic(device, MAIN_SERVICE_ID, TEMPERATURE_ID, temperatureData);
-    if (read != 8)
+    while (read != 8 && (millis()-start > 10000))
     {
         Serial.print(F("Received unusual length of temperature data: "));
         Serial.println(read);
+        read = readCharacteristic(device, MAIN_SERVICE_ID, TEMPERATURE_ID, temperatureData);
+    }
+    if (read != 8) {
         return t;
     }
     decrypt(temperatureData, 8, key);
@@ -48,11 +52,15 @@ int readBatteryLevel(BLEDevice device)
 {
     uint8_t batteryData[1];
     sendEmptyPin(device);
+    long start = millis();
     int read = readCharacteristic(device, BATTERY_SERVICE, BATTERY_ID, batteryData);
-    if (read != 1)
+    while (read != 1 && (millis() - start < 10000))
     {
         Serial.print(F("Received unusaul length of battery data: "));
         Serial.println(read);
+        read = readCharacteristic(device, BATTERY_SERVICE, BATTERY_ID, batteryData);
+    }
+    if (read != 1) {
         return -1;
     }
     return (int)*batteryData;

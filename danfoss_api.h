@@ -27,6 +27,8 @@ struct Thermostat
     Temperatures temps;
     int batteryLevel;
     int rssi;
+    long lastRead;
+    int connected;
 };
 
 int sendPin(BLEDevice d, uint8_t pin[4]);
