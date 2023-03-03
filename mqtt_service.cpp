@@ -13,19 +13,18 @@ const char deviceClass[] = "danfoss_eco2";
  * We need to set some variables to current state as
  * callback function is not aware of context.
  */
-int currentThermostat = 0;
-Thermostat *currentThermostats;
+float currentTargetTemperature;
 MqttClient *currentMqttClient;
 void readMessage(int size)
 {
-    char val[5];
+    char val[32];
     mqttClient.readBytes(val, size);
     val[size] = '\0';
     Serial.print(F("Received message: "));
     Serial.println(val);
 
     float f = atoff(val);
-    currentThermostats[currentThermostat].temps.desired = f;
+    currentTargetTemperature = f;
 }
 
 MQTTService::MQTTService(const char *b, int p)
@@ -119,16 +118,19 @@ int MQTTService::getUpdates(Thermostat *thermostats, int numThermostats)
         return 0;
     }
     char subscribeTopic[64];
-    currentThermostats = thermostats;
+    //currentThermostats = thermostats;
     currentMqttClient = &mqttClient;
     for (int i = 0; i < numThermostats; i++)
     {
-        currentThermostat = i;
-        sprintf(subscribeTopic, "%s/%s/set", deviceClass, thermostats[i].friendlyName);
+        currentTargetTemperature = 0.0;
+        sprintf(subscribeTopic, "%s/%s/set", deviceClass, thermostats[i].friendlyName());
         mqttClient.onMessage(readMessage);
         mqttClient.subscribe(subscribeTopic);
         delay(500);
         mqttClient.unsubscribe(subscribeTopic);
+        if (currentTargetTemperature > 0) {
+            thermostats[i].registerTargetTemperature(currentTargetTemperature);
+        }
     }
     mqttClient.stop();
     return 1;
@@ -137,13 +139,13 @@ int MQTTService::getUpdates(Thermostat *thermostats, int numThermostats)
 void MQTTService::composeAutoDiscoveryTopic(char *out, const char *haasClass, const char *type, Thermostat thermostat)
 {
     char name[64];
-    sprintf(name, "%s_%s", thermostat.friendlyName, type);
-    sprintf(out, "homeassistant/%s/danfoss_eco2/%s/config", haasClass, name);
+    sprintf(name, "%s_%s", thermostat.friendlyName(), type);
+    sprintf(out, "homeassistant/%s/%s/%s/config", haasClass, deviceClass, name);
 }
 
 void MQTTService::composeStateTopic(char *out, Thermostat thermostat)
 {
-    sprintf(out, "%s/%s/state", deviceClass, thermostat.friendlyName);
+    sprintf(out, "%s/%s/state", deviceClass, thermostat.friendlyName());
 }
 
 void MQTTService::composeAutoDiscoveryClimateMessage(char *out, Thermostat thermostat)
@@ -172,8 +174,8 @@ void MQTTService::composeAutoDiscoveryClimateMessage(char *out, Thermostat therm
                      "\"payload_not_available\": \"offline\""
                      "}";
     sprintf(out, message,
-            deviceClass, thermostat.friendlyName, thermostat.friendlyName, thermostat.friendlyName,
-            thermostat.friendlyName, thermostat.friendlyName, deviceClass);
+            deviceClass, thermostat.friendlyName(), thermostat.friendlyName(), thermostat.friendlyName(),
+            thermostat.friendlyName(), thermostat.friendlyName(), deviceClass);
 }
 
 void MQTTService::composeAutoDiscoverySensorBatteryMessage(char *out, Thermostat thermostat)
@@ -183,8 +185,8 @@ void MQTTService::composeAutoDiscoverySensorBatteryMessage(char *out, Thermostat
                      "\"unit_of_measurement\": \"%\", \"device\": {\"identifiers\": \"%s\", \"manufacturer\": \"Danfoss\","
                      "\"model\": \"ECO2\", \"name\": \"%s\"}, \"availability_topic\": \"%s/state\", \"payload_available\":"
                      "\"online\", \"payload_not_available\": \"offline\"}";
-    sprintf(out, message, thermostat.friendlyName, thermostat.friendlyName, deviceClass,
-            thermostat.friendlyName, thermostat.friendlyName, thermostat.friendlyName, deviceClass);
+    sprintf(out, message, thermostat.friendlyName(), thermostat.friendlyName(), deviceClass,
+            thermostat.friendlyName(), thermostat.friendlyName(), thermostat.friendlyName(), deviceClass);
 }
 
 void MQTTService::composeAutoDiscoverySensorTemperatureMessage(char *out, Thermostat thermostat)
@@ -195,8 +197,8 @@ void MQTTService::composeAutoDiscoverySensorTemperatureMessage(char *out, Thermo
                      "\"device\": {\"identifiers\": \"%s\", \"manufacturer\": \"Danfoss\","
                      "\"model\": \"ECO2\", \"name\": \"%s\"}, \"availability_topic\": \"%s/state\","
                      "\"payload_available\": \"online\", \"payload_not_available\": \"offline\"}";
-    sprintf(out, message, thermostat.friendlyName, thermostat.friendlyName, deviceClass,
-            thermostat.friendlyName, thermostat.friendlyName, thermostat.friendlyName, deviceClass);
+    sprintf(out, message, thermostat.friendlyName(), thermostat.friendlyName(), deviceClass,
+            thermostat.friendlyName(), thermostat.friendlyName(), thermostat.friendlyName(), deviceClass);
 }
 
 void MQTTService::composeStateMessage(char *out, Thermostat thermostat)
@@ -208,8 +210,8 @@ void MQTTService::composeStateMessage(char *out, Thermostat thermostat)
                      "\"set_point\": %.1f"
                      //  "\"last_update\": \"%s\""
                      "}";
-    sprintf(out, message, thermostat.friendlyName,
-            thermostat.batteryLevel, thermostat.temps.measured, thermostat.temps.set);
+    sprintf(out, message, thermostat.friendlyName(),
+            thermostat.batteryLevel(), thermostat.measuredTemperature(), thermostat.targetTemperature());
 }
 
 MQTTService::~MQTTService() {}

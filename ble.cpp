@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include "ArduinoBLE.h"
 
-BLEDevice connect(const char *address, int timeout)
+BLEDevice ble_connect(const char *address, int timeout)
 {
     long start = millis();
     BLE.scanForAddress(address);
@@ -13,12 +13,12 @@ BLEDevice connect(const char *address, int timeout)
         {
             Serial.println(F("Device found"));
             BLE.stopScan();
-            delay(250);
+            delay(500);
             device.connect();
-            delay(250);
+            delay(1000);
             while (!device.connected() && (millis() - start < timeout * 1000))
             {
-                delay(250);
+                delay(1000);
                 device.connect();
             }
             if (!device.connected())
@@ -35,7 +35,7 @@ BLEDevice connect(const char *address, int timeout)
     return BLEDevice();
 }
 
-int readCharacteristic(BLEDevice device, const char *serviceID, const char *characteristicID, uint8_t *result)
+int ble_read_characteristic(BLEDevice device, const char *serviceID, const char *characteristicID, uint8_t *result)
 {
     BLEService service = device.service(serviceID);
     if (!service)
@@ -56,7 +56,7 @@ int readCharacteristic(BLEDevice device, const char *serviceID, const char *char
     return characteristic.readValue(result, characteristic.valueLength());
 }
 
-int writeCharacteristic(BLEDevice device, const char *serviceID, const char *characteristicID, uint8_t *data, int length)
+int ble_write_characteristic(BLEDevice device, const char *serviceID, const char *characteristicID, uint8_t *data, int length)
 {
     BLEService s = device.service(serviceID);
     if (!s)

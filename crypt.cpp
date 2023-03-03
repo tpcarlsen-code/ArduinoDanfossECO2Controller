@@ -18,9 +18,9 @@ uint8_t twoHexToUint(char hex1, char hex2)
   return hexToUint(hex1) * 16 + hexToUint(hex2);
 }
 
-void hexStringToUint(const char *hex, uint8_t *res, int hexLen)
+void hexStringToUint(const char *hex, uint8_t *res)
 {
-  for (int i = 0; i < hexLen; i += 2)
+  for (int i = 0; i < strlen(hex); i += 2)
   {
     res[i / 2] = twoHexToUint(hex[i], hex[i + 1]);
   }
@@ -37,57 +37,46 @@ void formatHex(uint8_t *in, int lenIn, char *out)
   }
 }
 
-
 void reverse_chunks(uint8_t *data, int len)
 {
-  uint8_t temp[64];
+  uint8_t temp[4];
   for (int i = 0; i < len; i += 4)
   {
-    temp[i] = data[i + 3];
-    temp[i + 1] = data[i + 2];
-    temp[i + 2] = data[i + 1];
-    temp[i + 3] = data[i];
-    data[i] = temp[i];
-    data[i + 1] = temp[i + 1];
-    data[i + 2] = temp[i + 2];
-    data[i + 3] = temp[i + 3];
+    temp[0] = data[i + 3];
+    temp[1] = data[i + 2];
+    temp[2] = data[i + 1];
+    temp[3] = data[i];
+    data[i] = temp[0];
+    data[i + 1] = temp[1];
+    data[i + 2] = temp[2];
+    data[i + 3] = temp[3];
   }
 }
-
-// Used by the decrypt/encrypt functions to hold key data.
-//uint8_t *
-// If it stops working this is why.
 
 void decrypt(uint8_t *in, int inLength, const char *key)
 {
   reverse_chunks(in, inLength);
 
   uint8_t keyBytes[16];
-  hexStringToUint(key, keyBytes, 32);
+  hexStringToUint(key, keyBytes);
 
   size_t s = 0;
   uint8_t *result;
   result = (uint8_t *)xxtea_decrypt(in, inLength, keyBytes, &s);
   reverse_chunks(result, inLength);
-  for (int i = 0; i < inLength; i++)
-  {
-    in[i] = result[i];
-  }
+  memcpy((void *)in, (void *)result, inLength);
 }
 
 void encrypt(uint8_t *in, int inLength, const char *key)
 {
   reverse_chunks(in, inLength);
-  
+
   uint8_t keyBytes[16];
-  hexStringToUint(key, keyBytes, 32);
+  hexStringToUint(key, keyBytes);
 
   size_t s = 0;
   uint8_t *result;
   result = (uint8_t *)xxtea_encrypt(in, inLength, keyBytes, &s);
   reverse_chunks(result, inLength);
-  for (int i = 0; i < inLength; i++)
-  {
-    in[i] = result[i];
-  }
+  memcpy((void *)in, (void *)result, inLength);
 }

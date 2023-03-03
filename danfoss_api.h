@@ -19,22 +19,43 @@ struct Temperatures
     bool valid;
 };
 
-struct Thermostat
+class Thermostat
 {
-    char friendlyName[25];
-    char address[20];
-    char key[40];
-    Temperatures temps;
-    int batteryLevel;
-    int rssi;
-    long lastRead;
-    int connected;
-};
+public:
+    Thermostat();
+    Thermostat(const char *friendlyName, const char *address, const char *key);
+    int connect();
+    int disconnect();
+    int read();
+    int registerTargetTemperature(float target);
+    int shouldBeUpdated();
+    int write();
+    long lastRead();
+    float desiredTemperature();
+    float targetTemperature();
+    float measuredTemperature();
+    int batteryLevel();
+    int rssi();
+    int wasConnected();
+    char *address();
+    char *friendlyName();
 
-int sendPin(BLEDevice d, uint8_t pin[4]);
-int sendEmptyPin(BLEDevice d);
-Temperatures readTemperatureData(BLEDevice d, const char *key);
-bool setTargetTemperature(BLEDevice device, const char *key, float target);
-int readBatteryLevel(BLEDevice device);
+private:
+    int sendPin(uint8_t pin[4]);
+    int sendEmptyPin();
+    int readBatteryLevel();
+
+    BLEDevice _bleDevice;
+    bool _connected;
+    bool _lastConnectSuccess;
+    char _friendlyName[25];
+    char _address[18]; // mac address + \0
+    char _key[33];     // 32 char hex string + \0
+    Temperatures _temps;
+    int _batteryLevel;
+    int _rssi;
+    long _lastRead;
+    float tempCorrection;
+};
 
 #endif

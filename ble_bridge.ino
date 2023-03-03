@@ -3,27 +3,27 @@
 #include <ArduinoBLE.h>
 #include "utility/wifi_drv.h"
 #include <MemoryFree.h>
-#include "crypt.h"
 #include "ble.h"
 #include "danfoss_api.h"
+#include "mqtt_service.h"
 #include "xxtea.h"
 #include "env.h"
 #include "thermostats.h"
-#include "mqtt_service.h"
 
 int THERMOSTAT_STATUS_UPDATE_INTERVAL = 10 * 60 * 1000;
 int MQTT_CHECK_INTERVAL = 30 * 1000;
-int METRICS_PUSH_INTERVAL = 30 * 1000;
+int METRICS_PUSH_INTERVAL = 60 * 1000;
 int MQTT_PING_INTERVAL = 5 * 60 * 1000;
 
 long lastMQTTCheck = 0;
 long lastMetricsPush = 0;
 long lastMQTTPing = 0;
 
-Thermostat thermostats[10];
+Thermostat thermostats[20]; // reserve space for 20 thermostats.
 int numThermostats = 0;
 
-char *errors[100];
+char *messages[100];
+int numMessages = 0;
 
 char deviceID[30];
 
@@ -33,12 +33,13 @@ bool firstRun = true;
 
 MQTTService mqtt(mqttBroker, mqttPort);
 
+void (*resetFunc)(void) = 0; // declare reset function at address 0
+
 void setup()
 {
   pinMode(LED_BUILTIN, OUTPUT);
 
   Serial.begin(9600);
-  delay(2500);
 
   uint8_t mac[6];
   WiFi.macAddress(mac);
@@ -60,7 +61,7 @@ void setup()
     }
   }
 
-  while (!doWithWiFi(taskSetMQTTAutoDiscovery, 0))
+  while (!doWithWiFi(taskSetMQTTAutoDiscovery, -1))
   {
     Serial.println(F("Set auto discovery on MQTT failed in setup. Retrying!"));
     digitalWrite(LED_BUILTIN, HIGH);
@@ -84,7 +85,7 @@ void loop()
   if (now - lastMetricsPush > METRICS_PUSH_INTERVAL)
   {
     lastMetricsPush = now;
-    Serial.println(F("--- Performing metrics task"));
+    Serial.println(F("--- Performing metrics push task"));
     doWithWiFi(sendMetrics, 0);
     Serial.println(F("--- done\n"));
   }
@@ -99,131 +100,64 @@ void loop()
 
   for (int i = 0; i < numThermostats; i++)
   {
-    if (now - thermostats[i].lastRead > THERMOSTAT_STATUS_UPDATE_INTERVAL || firstRun)
+    if (now - thermostats[i].lastRead() > THERMOSTAT_STATUS_UPDATE_INTERVAL || thermostats[i].batteryLevel() == 0 || firstRun)
     {
       Serial.print(F("--- Performing thermostat status check task for "));
-      Serial.println(thermostats[i].friendlyName);
-      if (readThermostat(i))
+      Serial.println(thermostats[i].friendlyName());
+      if (doWithBLE(&thermostats[i], readThermostat))
       {
         Serial.println(F("--- Starting status write"));
         doWithWiFi(taskSendStatusToMQTT, i);
         Serial.println(F("--- done status write"));
-        thermostats[i].lastRead = now;
-        thermostats[i].connected = 1;
       }
-      else
-      {
-        thermostats[i].connected = 0;
-        thermostats[i].lastRead = (now - THERMOSTAT_STATUS_UPDATE_INTERVAL) + 3000;
-      }
+      printThermostat(thermostats[i]);
+
       Serial.println(F("--- done\n"));
     }
   }
 
-  int shouldBeUpdated = thermostatNeedsUpdating();
-  if (shouldBeUpdated > -1 && !dontUpdate)
-  {
-    char updateMessage[100];
-    sprintf(updateMessage,
-            "Thermostat %s has %f should have %f",
-            thermostats[shouldBeUpdated].friendlyName,
-            thermostats[shouldBeUpdated].temps.set,
-            thermostats[shouldBeUpdated].temps.desired);
-    Serial.println(updateMessage);
-    if (updateThermostat(shouldBeUpdated))
-    {
-      thermostats[shouldBeUpdated].temps.set = thermostats[shouldBeUpdated].temps.desired;
-    }
-    doWithWiFi(taskSendStatusToMQTT, shouldBeUpdated);
-  }
-  firstRun = false;
-}
-
-/**
- * Obsolete
-int taskReadThermostats()
-{
-  connectedThermostats = 0;
-  if (numThermostats == 0)
-  {
-    Serial.println(F("--- No thermostats registered. Skipping."));
-    return 0;
-  }
-  BLE.begin();
   for (int i = 0; i < numThermostats; i++)
   {
-    if (!readThermostat(i))
+    if (thermostats[i].shouldBeUpdated() && !dontUpdate)
     {
-      Serial.println(F("Could not read themostat."));
-    }
-    else
-    {
-      connectedThermostats++;
+      char updateMessage[100];
+      sprintf(updateMessage,
+              "Thermostat %s has %f should have %f",
+              thermostats[i].friendlyName(),
+              thermostats[i].targetTemperature(),
+              thermostats[i].desiredTemperature());
+      Serial.println(updateMessage);
+      if (!doWithBLE(&thermostats[i], updateThermostat))
+      {
+        Serial.println(F("Update failed!"));
+      }
+      doWithWiFi(taskSendStatusToMQTT, i);
     }
   }
-  BLE.end();
-  return 1;
-}
-*/
+  firstRun = false;
 
-int readThermostat(int index)
-{
-  BLE.begin();
-  BLEDevice thermostatBLE = connect(thermostats[index].address, 30);
-  if (!thermostatBLE || !thermostatBLE.connected())
+  if (millis() > 10 * 60 * 1000)
   {
-    Serial.print(F("Could not connect to "));
-    Serial.println(thermostats[index].address);
-    BLE.end();
+    Serial.println(F("Reset"));
+    resetFunc();
+  }
+}
+
+int readThermostat(Thermostat *t)
+{
+  if (!t->read())
+  {
+    Serial.println(F("Could not read!"));
     return 0;
   }
-  int rssi = thermostatBLE.rssi();
-  if (rssi < 0)
-  {
-    thermostats[index].rssi = rssi;
-  }
-  int batteryLevel = readBatteryLevel(thermostatBLE);
-  if (batteryLevel > -1)
-  {
-    thermostats[index].batteryLevel = batteryLevel;
-  }
-  Temperatures temps = readTemperatureData(thermostatBLE, thermostats[index].key);
-  thermostatBLE.disconnect();
-  if (temps.valid)
-  {
-    thermostats[index].temps.measured = temps.measured;
-    thermostats[index].temps.set = temps.set;
-  }
-  printThermostat(thermostats[index]);
-  thermostatBLE.disconnect();
-  BLE.end();
   return 1;
 }
 
-int updateThermostat(int index)
+int updateThermostat(Thermostat *t)
 {
-  BLE.begin();
-  Serial.println(F("--- Performing thermostat update"));
-  BLEDevice thermostatBLE = connect(thermostats[index].address, 30);
-  if (!thermostatBLE || !thermostatBLE.connected())
-  {
-    Serial.print(F("Could not connect to "));
-    Serial.println(thermostats[index].address);
-    thermostatBLE.disconnect();
-    return 0;
-  }
-  if (!setTargetTemperature(thermostatBLE, thermostats[index].key, thermostats[index].temps.desired))
-  {
-    Serial.print(F("Could not update!"));
-    thermostatBLE.disconnect();
-    BLE.end();
-    return 0;
-  }
-
-  thermostatBLE.disconnect();
-  BLE.end();
+  int res = t->write();
   Serial.println(F("--- done\n"));
-  return 1;
+  return res;
 }
 
 int taskSendStatusToMQTT(int thermostatIndex)
@@ -236,7 +170,7 @@ int taskSendStatusToMQTT(int thermostatIndex)
   return 1;
 }
 
-int taskCheckMQTTForChanges(int num)
+int taskCheckMQTTForChanges(int notUsed)
 {
   if (!mqtt.getUpdates(thermostats, numThermostats))
   {
@@ -246,7 +180,7 @@ int taskCheckMQTTForChanges(int num)
   return 1;
 }
 
-int sendMetrics(int num)
+int sendMetrics(int notUsed)
 {
   WiFiClient client;
   /*
@@ -279,15 +213,16 @@ int sendMetrics(int num)
                         "thermostat_set_temperature{friendly_name=\"%s\"} %.1f\n";
     for (int i = 0; i < numThermostats; i++)
     {
-      if (thermostats[i].batteryLevel == 0) {
-        continue;
+      if (thermostats[i].batteryLevel() == 0)
+      {
+        continue; // Thermostat has no valid values.
       }
       sprintf(thermostatMetrics, tmpl,
-              thermostats[i].friendlyName, thermostats[i].rssi,
-              thermostats[i].friendlyName, thermostats[i].batteryLevel,
-              thermostats[i].friendlyName, thermostats[i].connected,
-              thermostats[i].friendlyName, thermostats[i].temps.measured,
-              thermostats[i].friendlyName, thermostats[i].temps.set);
+              thermostats[i].friendlyName(), thermostats[i].rssi(),
+              thermostats[i].friendlyName(), thermostats[i].batteryLevel(),
+              thermostats[i].friendlyName(), thermostats[i].wasConnected(),
+              thermostats[i].friendlyName(), thermostats[i].measuredTemperature(),
+              thermostats[i].friendlyName(), thermostats[i].targetTemperature());
       strcat(body, thermostatMetrics);
     }
 
@@ -318,8 +253,7 @@ int taskSetMQTTAutoDiscovery(int notUse)
     return 0;
   }
 
-  Serial.println(F("--- done"));
-  Serial.println();
+  Serial.println(F("--- done\n"));
   return 1;
 }
 
@@ -335,6 +269,24 @@ int doWithWiFi(int (*task)(int), int param)
   WiFi.disconnect();
   WiFi.end();
   digitalWrite(LED_BUILTIN, LOW);
+  return value;
+}
+
+int doWithBLE(Thermostat *t, int (*task)(Thermostat *))
+{
+  BLE.begin();
+  int connected = t->connect();
+  if (!connected)
+  {
+    Serial.print(F("Could not connect to "));
+    Serial.println(t->address());
+    t->disconnect();
+    BLE.end();
+    return 0;
+  }
+  int value = task(t);
+  t->disconnect();
+  BLE.end();
   return value;
 }
 
@@ -360,8 +312,7 @@ int thermostatNeedsUpdating()
 {
   for (int i = 0; i < numThermostats; i++)
   {
-    if (thermostats[i].temps.desired != thermostats[i].temps.set &&
-        thermostats[i].temps.set > 0 && thermostats[i].temps.desired > 0)
+    if (thermostats[i].shouldBeUpdated())
     {
       return i;
     }
@@ -372,21 +323,23 @@ int thermostatNeedsUpdating()
 void printThermostat(Thermostat t)
 {
   Serial.print(F("Friendly name: "));
-  Serial.println(t.friendlyName);
+  Serial.println(t.friendlyName());
   Serial.print(F("Address: "));
-  Serial.println(t.address);
-  Serial.print(F("Key: "));
-  Serial.println(t.key);
+  Serial.println(t.address());
+  //  Serial.print(F("Key: "));
+  //  Serial.println(t.key());
   Serial.print(F("Set temperature: "));
-  Serial.println(t.temps.set);
+  Serial.println(t.targetTemperature());
   Serial.print(F("Room temperature: "));
-  Serial.println(t.temps.measured);
+  Serial.println(t.measuredTemperature());
   Serial.print(F("Desired temperature: "));
-  Serial.println(t.temps.desired);
+  Serial.println(t.desiredTemperature());
   Serial.print(F("Battery: "));
-  Serial.println(t.batteryLevel);
+  Serial.println(t.batteryLevel());
   Serial.print(F("RSSI: "));
-  Serial.println(t.rssi);
+  Serial.println(t.rssi());
+  Serial.print(F("Last read: "));
+  Serial.println(t.lastRead());
 }
 
 void parseThermostats(const char *body)
@@ -395,6 +348,10 @@ void parseThermostats(const char *body)
   int currentFieldIndex = 0;
   char currentFieldValue[50];
   int currentFieldPointer = 0;
+  char friendlyName[50];
+  char address[50];
+  char key[50];
+
   for (int i = 0; i < strlen(body); i++)
   {
     if (body[i] == '\n' || body[i] == ' ')
@@ -403,13 +360,13 @@ void parseThermostats(const char *body)
       switch (currentFieldIndex)
       {
       case 0:
-        strcpy(thermostats[currentThermostatIndex].friendlyName, currentFieldValue);
+        strcpy(friendlyName, currentFieldValue);
         break;
       case 1:
-        strcpy(thermostats[currentThermostatIndex].address, currentFieldValue);
+        strcpy(address, currentFieldValue);
         break;
       case 2:
-        strcpy(thermostats[currentThermostatIndex].key, currentFieldValue);
+        strcpy(key, currentFieldValue);
         break;
       }
       memset(currentFieldValue, 0, 50);
@@ -417,8 +374,9 @@ void parseThermostats(const char *body)
       currentFieldPointer = 0;
       if (body[i] == '\n')
       {
+        Thermostat t(friendlyName, address, key);
         currentFieldIndex = 0;
-        thermostats[currentThermostatIndex].lastRead = 0;
+        thermostats[currentThermostatIndex] = t;
         currentThermostatIndex++;
       }
     }
@@ -435,7 +393,7 @@ int activeThermostats()
   int active = 0;
   for (int i = 0; i < numThermostats; i++)
   {
-    if (thermostats[i].lastRead > 0 && (thermostats[i].lastRead + 20 * 60 * 1000) > millis())
+    if (thermostats[i].lastRead() > 0 && (thermostats[i].lastRead() + 20 * 60 * 1000) > millis())
     {
       active++;
     }
