@@ -15,10 +15,10 @@ BLEDevice ble_connect(const char *address, int timeout)
             BLE.stopScan();
             delay(500);
             device.connect();
-            delay(1000);
+            delay(500);
             while (!device.connected() && (millis() - start < timeout * 1000))
             {
-                delay(1000);
+                delay(500);
                 device.connect();
             }
             if (!device.connected())
@@ -26,9 +26,7 @@ BLEDevice ble_connect(const char *address, int timeout)
                 Serial.println(F("Could not connect to device!"));
                 return device;
             }
-            delay(250);
             device.discoverAttributes();
-            delay(250);
             return device;
         }
     }
@@ -58,13 +56,13 @@ int ble_read_characteristic(BLEDevice device, const char *serviceID, const char 
 
 int ble_write_characteristic(BLEDevice device, const char *serviceID, const char *characteristicID, uint8_t *data, int length)
 {
-    BLEService s = device.service(serviceID);
-    if (!s)
+    BLEService service = device.service(serviceID);
+    if (!service)
     {
         Serial.println(F("service not found!"));
         return 0;
     }
-    BLECharacteristic c = s.characteristic(characteristicID);
+    BLECharacteristic c = service.characteristic(characteristicID);
     if (!c)
     {
         Serial.println(F("characteristic not found!"));

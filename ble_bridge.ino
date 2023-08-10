@@ -10,12 +10,14 @@
 #include "env.h"
 #include "thermostats.h"
 
-int THERMOSTAT_STATUS_UPDATE_INTERVAL = 10 * 60 * 1000;
+int THERMOSTAT_STATUS_UPDATE_INTERVAL = 15 * 60 * 1000;
+int MQTT_REGISTRATION_INTERVAL = 10 * 60 * 1000;
 int MQTT_CHECK_INTERVAL = 30 * 1000;
 int METRICS_PUSH_INTERVAL = 60 * 1000;
 int MQTT_PING_INTERVAL = 5 * 60 * 1000;
 
 long lastMQTTCheck = 0;
+long lastMQTTRegistration = 0;
 long lastMetricsPush = 0;
 long lastMQTTPing = 0;
 
@@ -32,8 +34,6 @@ int dontUpdate = 0;
 bool firstRun = true;
 
 MQTTService mqtt(mqttBroker, mqttPort);
-
-void (*resetFunc)(void) = 0; // declare reset function at address 0
 
 void setup()
 {
@@ -75,12 +75,20 @@ void setup()
 
 void resetTimers()
 {
-  lastMQTTCheck = lastMetricsPush = lastMQTTPing = millis();
+  lastMQTTCheck = lastMetricsPush = lastMQTTPing = lastMQTTRegistration = millis();
 }
 
 void loop()
 {
   long now = millis();
+
+  if (now - lastMQTTRegistration > MQTT_REGISTRATION_INTERVAL)
+  {
+    lastMQTTRegistration = now;
+    Serial.println(F("--- Performing MQTT registration task"));
+    doWithWiFi(taskSetMQTTAutoDiscovery, -1);
+    Serial.println(F("--- done\n"));
+  }
 
   if (now - lastMetricsPush > METRICS_PUSH_INTERVAL)
   {
@@ -136,11 +144,30 @@ void loop()
   }
   firstRun = false;
 
-  if (millis() > 10 * 60 * 1000)
+  if (shouldReset())
   {
     Serial.println(F("Reset"));
-    resetFunc();
+    NVIC_SystemReset();
   }
+  delay(500);
+}
+
+bool shouldReset()
+{
+
+  if (millis() > 27 * 60 * 60 * 1000)
+  {
+    return true;
+  }
+
+  for (int i = 0; i < numThermostats; i++)
+  {
+    if (millis() - thermostats[i].lastRead() < 30 * 60 * 1000)
+    {
+      return false;
+    }
+  }
+  return true;
 }
 
 int readThermostat(Thermostat *t)
@@ -203,12 +230,13 @@ int sendMetrics(int notUsed)
     char line1[60];
     sprintf(line1, "POST /metrics/job/%s HTTP/1.1\r\n", deviceID);
 
-    char body[1024];
-    sprintf(body, "memory_free_bytes %d\nconnected_thermostats %d\n", freeMemory(), activeThermostats());
+    char body[2048];
+    sprintf(body, "memory_free_bytes %d\nconnected_thermostats %d\nuptime_ms %d\n", freeMemory(), activeThermostats(), millis());
     char thermostatMetrics[1024];
     const char tmpl[] = "thermostat_rssi{friendly_name=\"%s\"} %d\n"
                         "thermostat_battery_level{friendly_name=\"%s\"} %d\n"
                         "thermostat_connected{friendly_name=\"%s\"} %d\n"
+                        "thermostat_connect_duration{friendly_name=\"%s\"} %d\n"
                         "thermostat_room_temperature{friendly_name=\"%s\"} %.1f\n"
                         "thermostat_set_temperature{friendly_name=\"%s\"} %.1f\n";
     for (int i = 0; i < numThermostats; i++)
@@ -221,6 +249,7 @@ int sendMetrics(int notUsed)
               thermostats[i].friendlyName(), thermostats[i].rssi(),
               thermostats[i].friendlyName(), thermostats[i].batteryLevel(),
               thermostats[i].friendlyName(), thermostats[i].wasConnected(),
+              thermostats[i].friendlyName(), thermostats[i].connectTime(),
               thermostats[i].friendlyName(), thermostats[i].measuredTemperature(),
               thermostats[i].friendlyName(), thermostats[i].targetTemperature());
       strcat(body, thermostatMetrics);
@@ -275,7 +304,9 @@ int doWithWiFi(int (*task)(int), int param)
 int doWithBLE(Thermostat *t, int (*task)(Thermostat *))
 {
   BLE.begin();
+  long connectStart = millis();
   int connected = t->connect();
+  long connectDuration = millis() - connectStart;
   if (!connected)
   {
     Serial.print(F("Could not connect to "));

@@ -66,12 +66,18 @@ char *Thermostat::friendlyName()
     return this->_friendlyName;
 }
 
+unsigned long Thermostat::connectTime()
+{
+    return this->_connectTime;
+}
+
 int Thermostat::connect()
 {
     if (this->_connected)
     {
         return 1;
     }
+    unsigned long connectStart = millis();
     BLEDevice device = ble_connect(_address, 45);
     if (!device || !device.connected())
     {
@@ -82,6 +88,7 @@ int Thermostat::connect()
     this->_bleDevice = device;
     this->_connected = true;
     this->_lastConnectSuccess = true;
+    this->_connectTime = millis() - connectStart;
     return 1;
 }
 

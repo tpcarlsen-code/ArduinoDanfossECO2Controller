@@ -37,6 +37,7 @@ public:
     int batteryLevel();
     int rssi();
     int wasConnected();
+    unsigned long connectTime();
     char *address();
     char *friendlyName();
 
@@ -47,6 +48,7 @@ private:
 
     BLEDevice _bleDevice;
     bool _connected;
+    unsigned long _connectTime;
     bool _lastConnectSuccess;
     char _friendlyName[25];
     char _address[18]; // mac address + \0
